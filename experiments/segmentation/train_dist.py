@@ -21,6 +21,9 @@ import torchvision.transforms as transform
 from torch.nn.parallel.scatter_gather import gather
 from torch.nn.parallel import DistributedDataParallel
 
+# For TensorBoard.
+from torch.utils.tensorboard import SummaryWriter
+
 import encoding.utils as utils
 from encoding.nn import SegmentationLosses, DistSyncBatchNorm
 
@@ -147,7 +150,10 @@ def main():
     args.lr = args.lr * args.world_size
     mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
 
+
 best_pred = 0.0
+write = None
+
 
 def main_worker(gpu, ngpus_per_node, args):
     global best_pred
@@ -158,6 +164,11 @@ def main_worker(gpu, ngpus_per_node, args):
                             init_method=args.dist_url,
                             world_size=args.world_size,
                             rank=args.rank)
+     # TensorBoard.
+    global writer
+    if args.rank == 0:
+        writer = SummaryWriter('runs/resnest')
+
     torch.cuda.set_device(args.gpu)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
@@ -209,6 +220,11 @@ def main_worker(gpu, ngpus_per_node, args):
     # distributed data parallel
     model.cuda(args.gpu)
     criterion.cuda(args.gpu)
+
+    # Add the model in tesnorboard.
+    # if args.rank == 0:
+        # writer.add_graph(model)
+
     model = DistributedDataParallel(model, device_ids=[args.gpu])
     metric = utils.SegmentationMetric(nclass=nclass)
 
@@ -250,6 +266,10 @@ def main_worker(gpu, ngpus_per_node, args):
             if i % 100 == 0 and args.gpu == 0:
                 iter_per_sec = 100.0 / (time.time() - tic) if i != 0 else 1.0/ (time.time() - tic)
                 tic = time.time()
+
+                # Add scalar for tensorboard.
+                if args.rank == 0:
+                    writer.add_scalar('training loss', train_loss / (i + 1), epoch * len(trainloader) + i)
                 print('Epoch: {}, Iter: {}, Speed: {:.3f} iter/sec, Train loss: {:.3f}'. \
                       format(epoch, i, iter_per_sec, train_loss / (i + 1)))
 
@@ -277,6 +297,10 @@ def main_worker(gpu, ngpus_per_node, args):
         all_metircs = utils.torch_dist_sum(args.gpu, *all_metircs)
         pixAcc, mIoU = utils.get_pixacc_miou(*all_metircs)
         if args.gpu == 0:
+            # Add scalar for tensorboard.
+            if args.rank == 0:
+                writer.add_scalar('Validation pixAcc', pixAcc, epoch)
+                writer.add_scalar('Validation mIoU', mIoU, epoch)
             print('pixAcc: %.3f, mIoU: %.3f' % (pixAcc, mIoU))
             if args.eval: return
             new_pred = (pixAcc + mIoU)/2
