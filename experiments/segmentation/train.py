@@ -20,6 +20,9 @@ from encoding.nn import SegmentationLosses, SyncBatchNorm
 from encoding.parallel import DataParallelModel, DataParallelCriterion
 from encoding.datasets import get_dataset
 from encoding.models import get_segmentation_model
+ 
+# For TensorBoard.
+from torch.utils.tensorboard import SummaryWriter
 
 class Options():
     def __init__(self):
@@ -123,10 +126,16 @@ class Options():
         print(args)
         return args
 
+writer = None
+
 
 class Trainer():
     def __init__(self, args):
         self.args = args
+
+        # TensorBoard.
+        global writer
+        writer = SummaryWriter('runs/resnest')
         # data transforms
         input_transform = transform.Compose([
             transform.ToTensor(),
@@ -204,6 +213,9 @@ class Trainer():
             loss.backward()
             self.optimizer.step()
             train_loss += loss.item()
+            # Add scalar for tensorboard.
+            writer.add_scalar('training loss', train_loss / (i + 1), epoch * len(self.trainloader) + i)
+
             tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
 
         if self.args.no_val:
@@ -245,6 +257,9 @@ class Trainer():
             mIoU = IoU.mean()
             tbar.set_description(
                 'pixAcc: %.3f, mIoU: %.3f' % (pixAcc, mIoU))
+        # Add scalar for tensorboard.
+        writer.add_scalar('Validation pixAcc', pixAcc, epoch)
+        writer.add_scalar('Validation mIoU', mIoU, epoch)
 
         new_pred = (pixAcc + mIoU)/2
         if new_pred > self.best_pred:
